@@ -5,8 +5,7 @@
   "channels": {
     "whatsapp": {
       "enabled": true,
-      "allowFrom": ["+919392044391"],
-      "dmPolicy": "pairing"
+      "allowFrom": ["+919392044391"]
     }
   }
 }
