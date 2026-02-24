@@ -41,8 +41,10 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 ENV NODE_ENV=production
-# Copy OpenClaw configuration file if it exists
-COPY --chown=node:node openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
+# Copy OpenClaw configuration file
+RUN mkdir -p /home/node/.openclaw
+COPY --chown=node:node openclaw.json /home/node/.openclaw/openclaw.json
+RUN chmod 600 /home/node/.openclaw/openclaw.json
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
