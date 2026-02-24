@@ -1,9 +1,11 @@
 #!/bin/bash
 set -e
 
-# Set home directory
 export HOME=/home/node
 cd "$HOME"
+
+# FIX: Remove any corrupted config.zip that Railway might have downloaded
+rm -f "$HOME/config.zip" /app/config.zip /tmp/config.zip 2>/dev/null || true
 
 # Create directories
 mkdir -p "$HOME/.openclaw/agents/main/agent" "$HOME/.openclaw/credentials"
