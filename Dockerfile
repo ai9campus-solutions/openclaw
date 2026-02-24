@@ -1,10 +1,15 @@
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
-RUN curl -fsSL https://bun.sh/install | bash
+RUN curl -fsSL https://bun.sh/install  | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 RUN corepack enable
 WORKDIR /app
-RUN chown -R node:node /app
-RUN chmod -R 755 /app
+
+# FIX 1: Create the .openclaw directory with proper permissions for WhatsApp config
+RUN mkdir -p /home/node/.openclaw && chown -R node:node /home/node/.openclaw && chmod -R 755 /home/node/.openclaw
+
+# FIX 2: Ensure /app is also properly owned
+RUN chown -R node:node /app && chmod -R 755 /app
+
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; fi
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
@@ -23,6 +28,11 @@ ENV OPENCLAW_PREFER_PNPM=1
 ENV OPENCLAW_NO_BUN=1
 RUN pnpm ui:build
 ENV NODE_ENV=production
+
+# FIX 3: Set environment variable to tell OpenClaw where to store config
+ENV OPENCLAW_STATE_DIR=/home/node/.openclaw
+ENV HOME=/home/node
+
 USER node
 RUN mkdir -p /app/bin
 COPY --chown=node:node bin/start.sh /app/bin/start.sh
