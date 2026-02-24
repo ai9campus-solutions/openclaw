@@ -4,7 +4,7 @@ set -e
 mkdir -p "$HOME/.openclaw/agents/main/agent"
 mkdir -p "$HOME/.openclaw/credentials"
 
-# Write Anthropic API key (safe to overwrite every time)
+# Write Anthropic API key
 if [ -n "$ANTHROPIC_API_KEY" ]; then
   printf '{\n  "profiles": {\n    "anthropic:default": {\n      "type": "api_key",\n      "provider": "anthropic",\n      "key": "%s"\n    }\n  },\n  "defaults": {\n    "anthropic": "anthropic:default"\n  }\n}\n' "$ANTHROPIC_API_KEY" \
     > "$HOME/.openclaw/agents/main/agent/auth-profiles.json"
@@ -12,19 +12,27 @@ if [ -n "$ANTHROPIC_API_KEY" ]; then
   echo "[OK] Anthropic API key configured"
 fi
 
-# Write WhatsApp config ONLY if file does not exist yet
-# AND include required meta block so gateway doesn't throw missing-meta-before-write
-if [ -n "$WHATSAPP_ALLOW_FROM" ] && [ ! -f "$HOME/.openclaw/openclaw.json" ]; then
+# Write openclaw.json only if it doesn't exist yet
+if [ ! -f "$HOME/.openclaw/openclaw.json" ]; then
   cat > "$HOME/.openclaw/openclaw.json" << ENDOFCONFIG
 {
   "meta": {
     "lastTouchedVersion": "2026.2.2",
     "lastTouchedAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   },
+  "gateway": {
+    "bind": "lan",
+    "port": ${PORT:-18789},
+    "trustedProxies": ["100.64.0.0/10"],
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    }
+  },
   "channels": {
     "whatsapp": {
       "dmPolicy": "allowlist",
-      "allowFrom": ["$WHATSAPP_ALLOW_FROM"],
+      "allowFrom": ["${WHATSAPP_ALLOW_FROM}"],
       "sendReadReceipts": true,
       "ackReaction": {
         "emoji": "👀",
@@ -35,10 +43,38 @@ if [ -n "$WHATSAPP_ALLOW_FROM" ] && [ ! -f "$HOME/.openclaw/openclaw.json" ]; th
   }
 }
 ENDOFCONFIG
-  echo "[OK] WhatsApp config written for $WHATSAPP_ALLOW_FROM"
+  echo "[OK] Config written"
 else
-  echo "[OK] WhatsApp config already exists, skipping write"
+  echo "[OK] Config already exists, skipping"
 fi
 
 echo "[->] Starting OpenClaw gateway..."
 exec "$@"
+```
+
+Commit the change.
+
+---
+
+### Fix 2 — Add 2 new variables in Railway
+
+Go to Railway → your openclaw service → **Variables** → add these:
+
+| Name | Value |
+|---|---|
+| `OPENCLAW_GATEWAY_TOKEN` | any password you choose e.g. `mysecrettoken123` |
+| `PORT` | `18789` |
+
+---
+
+### Fix 3 — Change domain port back to 18789 in Railway Settings
+
+Go to Settings → Networking → edit the domain → set port back to **18789** → Save.
+
+---
+
+### Then Redeploy
+
+Go to Deployments → Redeploy. Once it's running, open:
+```
+https://openclaw-production-13dc.up.railway.app
