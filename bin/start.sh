@@ -13,7 +13,7 @@ if [ -n "$ANTHROPIC_API_KEY" ]; then
 fi
 
 # Write openclaw.json only if it doesn't exist yet
-if [ ! -f "$HOME/.openclaw/openclaw.json" ]; then
+if [ ! -f "$HOME/.openclaw/openclaw.json" ] || [ -n "$FORCE_CONFIG_RESET" ]; then
   cat > "$HOME/.openclaw/openclaw.json" << ENDOFCONFIG
 {
   "meta": {
