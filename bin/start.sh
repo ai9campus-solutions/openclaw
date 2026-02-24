@@ -4,7 +4,7 @@ set -e
 mkdir -p "$HOME/.openclaw/agents/main/agent"
 mkdir -p "$HOME/.openclaw/credentials"
 
-# Write Anthropic API key (always safe to overwrite)
+# Write Anthropic API key (safe to overwrite every time)
 if [ -n "$ANTHROPIC_API_KEY" ]; then
   printf '{\n  "profiles": {\n    "anthropic:default": {\n      "type": "api_key",\n      "provider": "anthropic",\n      "key": "%s"\n    }\n  },\n  "defaults": {\n    "anthropic": "anthropic:default"\n  }\n}\n' "$ANTHROPIC_API_KEY" \
     > "$HOME/.openclaw/agents/main/agent/auth-profiles.json"
@@ -13,10 +13,28 @@ if [ -n "$ANTHROPIC_API_KEY" ]; then
 fi
 
 # Write WhatsApp config ONLY if file does not exist yet
-# (prevents crash loop from overwriting gateway-managed config on every restart)
+# AND include required meta block so gateway doesn't throw missing-meta-before-write
 if [ -n "$WHATSAPP_ALLOW_FROM" ] && [ ! -f "$HOME/.openclaw/openclaw.json" ]; then
-  printf '{\n  channels: {\n    whatsapp: {\n      dmPolicy: "allowlist",\n      allowFrom: ["%s"],\n      sendReadReceipts: true,\n      ackReaction: { emoji: "👀", direct: true, group: "mentions" }\n    }\n  }\n}\n' "$WHATSAPP_ALLOW_FROM" \
-    > "$HOME/.openclaw/openclaw.json"
+  cat > "$HOME/.openclaw/openclaw.json" << ENDOFCONFIG
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.2",
+    "lastTouchedAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  },
+  "channels": {
+    "whatsapp": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["$WHATSAPP_ALLOW_FROM"],
+      "sendReadReceipts": true,
+      "ackReaction": {
+        "emoji": "👀",
+        "direct": true,
+        "group": "mentions"
+      }
+    }
+  }
+}
+ENDOFCONFIG
   echo "[OK] WhatsApp config written for $WHATSAPP_ALLOW_FROM"
 else
   echo "[OK] WhatsApp config already exists, skipping write"
