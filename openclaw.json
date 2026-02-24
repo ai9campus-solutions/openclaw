@@ -5,27 +5,9 @@
   "channels": {
     "whatsapp": {
       "enabled": true,
-      "allowFrom": ["+1234567890"],
+      "allowFrom": ["+919392044391"],
       "dmPolicy": "pairing"
     }
   }
 }
 ```
-
-**IMPORTANT:** Replace `+1234567890` with **YOUR actual WhatsApp phone number** (including country code, like `+1` for US, `+91` for India, etc.)
-
----
-
-### **Step 3: Save the File to GitHub**
-
-1. Scroll down to the bottom
-2. Click the green **"Commit changes"** button
-3. A popup appears - just click **"Commit changes"** again
-
----
-
-### **Step 4: Wait for Railway to Auto-Deploy**
-
-Go to your Railway dashboard:
-```
-https://railway.app/project/[YOUR_PROJECT_ID]
