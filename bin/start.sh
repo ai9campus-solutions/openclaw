@@ -52,7 +52,7 @@ else
 fi
 
 echo "[->] Starting OpenClaw gateway..."
-exec "$@"
+exec openclaw gateway
 ```
 
 Commit the change.
