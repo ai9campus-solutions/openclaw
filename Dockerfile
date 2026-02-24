@@ -3,7 +3,8 @@ RUN curl -fsSL https://bun.sh/install  | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 RUN corepack enable
 
-# Create app directory
+# Create app directory and set permissions BEFORE any operations
+RUN mkdir -p /app && chown -R node:node /app && chmod -R 755 /app
 WORKDIR /app
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
@@ -12,6 +13,10 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
+
+# FIX: Ensure node owns /app before switching to node user
+RUN chown -R node:node /app
+
 USER node
 RUN pnpm install --frozen-lockfile
 USER root
