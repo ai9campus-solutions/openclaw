@@ -20,13 +20,16 @@ if [ ! -f "$HOME/.openclaw/openclaw.json" ]; then
     "lastTouchedVersion": "2026.2.2",
     "lastTouchedAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   },
-  "gateway": {
+"gateway": {
     "bind": "lan",
     "port": ${PORT:-18789},
     "trustedProxies": ["100.64.0.0/10"],
     "auth": {
       "mode": "token",
       "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "controlUi": {
+      "allowedOrigins": ["https://openclaw-production-13dc.up.railway.app"]
     }
   },
   "channels": {
