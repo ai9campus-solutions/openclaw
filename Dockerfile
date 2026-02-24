@@ -3,10 +3,8 @@ RUN curl -fsSL https://bun.sh/install  | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 RUN corepack enable
 
-# EMERGENCY FIX: Make everything writable by anyone
-RUN mkdir -p /app && chmod 777 /app
+# Create app directory
 WORKDIR /app
-RUN chmod 777 /app /tmp /home
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; fi
@@ -26,14 +24,26 @@ ENV OPENCLAW_PREFER_PNPM=1
 ENV OPENCLAW_NO_BUN=1
 RUN pnpm ui:build
 ENV NODE_ENV=production
-USER node
+
+# CRITICAL FIX: Set HOME environment variable properly
+ENV HOME=/home/node
+ENV USER=node
+
+# Create .openclaw directory with proper permissions
+RUN mkdir -p /home/node/.openclaw && chmod 755 /home/node/.openclaw
+
+# Ensure start.sh is executable
 RUN mkdir -p /app/bin
 COPY --chown=node:node bin/start.sh /app/bin/start.sh
 RUN chmod +x /app/bin/start.sh
 
-# EMERGENCY FIX: Change to root user so it can write anywhere
+# Switch to root temporarily to fix permissions, then back to node
 USER root
-RUN chmod -R 777 /app /home/node
+RUN chown -R node:node /app && chmod -R 755 /app
+RUN chown -R node:node /home/node && chmod -R 755 /home/node
+
+# CRITICAL FIX: Stay as root for entrypoint, then switch to node in start.sh
+USER root
 
 ENTRYPOINT ["/app/bin/start.sh"]
 CMD ["node","openclaw.mjs","gateway","--allow-unconfigured"]
