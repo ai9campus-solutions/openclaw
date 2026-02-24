@@ -76,7 +76,8 @@ else
   echo "[!] WARNING: ANTHROPIC_API_KEY not set - agent will fail to authenticate"
 fi
 
-# Execute the main command
+echo "[→] Starting OpenClaw gateway..."
+# Execute the main command with verbose output
 exec "$@"
 INITEOF
 
