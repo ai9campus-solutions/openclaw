@@ -41,18 +41,21 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 ENV NODE_ENV=production
+# Copy OpenClaw configuration file if it exists
+COPY --chown=node:node openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-# Create initialization script for API key configuration
+# Create initialization script for API key configuration and credential handling
 RUN mkdir -p /app/bin && cat > /app/bin/init-auth.sh << 'INITEOF'
 #!/bin/bash
 set -e
 
-# Create OpenClaw config directory
+# Create OpenClaw config directories
 mkdir -p $HOME/.openclaw/agents/main/agent
+mkdir -p $HOME/.openclaw/credentials
 
 # Initialize auth-profiles.json from environment variables
 if [ -n "$ANTHROPIC_API_KEY" ]; then
@@ -76,8 +79,16 @@ else
   echo "[!] WARNING: ANTHROPIC_API_KEY not set - agent will fail to authenticate"
 fi
 
+# Decode WhatsApp credentials from base64 if provided
+if [ -n "$WHATSAPP_CREDENTIALS_B64" ]; then
+  echo "[→] Decoding WhatsApp credentials..."
+  echo "$WHATSAPP_CREDENTIALS_B64" | base64 -d > $HOME/.openclaw/credentials/whatsapp
+  chmod 600 $HOME/.openclaw/credentials/whatsapp
+  echo "[✓] WhatsApp credentials configured"
+fi
+
 echo "[→] Starting OpenClaw gateway..."
-# Execute the main command with verbose output
+# Execute the main command
 exec "$@"
 INITEOF
 
