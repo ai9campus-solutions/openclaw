@@ -24,12 +24,39 @@ RUN pnpm ui:build
 ENV NODE_ENV=production
 USER node
 RUN mkdir -p /app/bin
+COPY --chown=node:node bin/start.sh /app/bin/start.sh
+RUN chmod +x /app/bin/start.sh
+ENTRYPOINT ["/app/bin/start.sh"]
+CMD ["node","openclaw.mjs","gateway","--allow-unconfigured"]
+```
 
-# ── Fixed start.sh ──────────────────────────────────────────────────────────
-# Outer heredoc uses 'SCRIPT' (quoted) so $HOME etc. are NOT expanded at build
-# time. Inner heredocs use unquoted AUTH / CFGJSON so env-vars expand at
-# runtime when the script actually runs.
-RUN cat > /app/bin/start.sh << 'SCRIPT'
-#!/bin/bash
-set -e
-mkdir -p $HOME/.openclaw/
+6. Scroll down, click green **"Commit changes"**
+7. Click **"Commit changes"** again in the popup
+
+✅ Dockerfile is fixed.
+
+---
+
+## 🟢 STEP 4 — Set environment variables in Railway
+
+1. Go to **railway.com** → open your project → click your **openclaw service**
+2. Click **"Variables"** in the top tabs
+3. Add these two variables (click **"New Variable"** for each):
+
+| Name | Value |
+|---|---|
+| `WHATSAPP_ALLOW_FROM` | your WhatsApp number with country code, e.g. `+919876543210` |
+| `OPENCLAW_NO_BUN` | `1` |
+
+*(ANTHROPIC_API_KEY should already be there — if not, add it too)*
+
+---
+
+## 🟢 STEP 5 — Add a Volume (so WhatsApp login never gets lost)
+
+1. Still in Railway, click your **openclaw service**
+2. Click **"Settings"** tab
+3. Scroll down to find **"Volumes"** → click **"Add Volume"**
+4. Set the mount path to exactly:
+```
+   /home/node/.openclaw
