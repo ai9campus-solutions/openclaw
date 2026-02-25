@@ -66,8 +66,8 @@ ENV OPENCLAW_PREFER_PNPM=1 \
     BAILEYS_STORE_PATH=/home/node/.openclaw/credentials/whatsapp/default \
     PORT=3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:${PORT}/health || exit 1
+# Health check - CRITICAL: Must match the port app actually listens on
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD curl -f http://localhost:3000/health || exit 1
 
 ENTRYPOINT ["/app/bin/entrypoint.sh"]
