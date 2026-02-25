@@ -15,13 +15,13 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Create app directory with proper ownership
-RUN mkdir -p /app /home/node/.openclaw /data && \
+RUN mkdir -p /app /home/node/.openclaw /data /app/bin && \
     chown -R node:node /app /home/node /data && \
     chmod 755 /app /home/node /data
 
 WORKDIR /app
 
-# Copy files with proper ownership
+# Copy files with proper ownership - ORDER MATTERS for layer caching
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
@@ -31,15 +31,19 @@ COPY --chown=node:node scripts ./scripts
 USER node
 RUN pnpm install --frozen-lockfile
 
-# Switch back to root for additional setup
-USER root
-
-# Build as node user
-USER node
+# Copy the rest of the application
 COPY --chown=node:node . .
+
+# Build the application
 RUN pnpm build && \
     pnpm ui:build && \
     rm -rf node_modules/.cache
+
+# Copy and set up start script (must be done as root for proper permissions)
+USER root
+COPY --chown=node:node bin/start.sh /app/bin/start.sh
+RUN chmod +x /app/bin/start.sh && \
+    chown -R node:node /app /home/node
 
 # Environment configuration for Railway
 ENV OPENCLAW_PREFER_PNPM=1 \
@@ -50,15 +54,6 @@ ENV OPENCLAW_PREFER_PNPM=1 \
     OPENCLAW_STATE_DIR=/home/node/.openclaw \
     OPENCLAW_WORKSPACE_DIR=/home/node/workspace \
     PORT=3000
-
-# Create bin directory and copy start script
-USER root
-RUN mkdir -p /app/bin
-COPY --chown=node:node bin/start.sh /app/bin/start.sh
-
-# Final permission fix
-RUN chmod +x /app/bin/start.sh && \
-    chown -R node:node /app /home/node
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
