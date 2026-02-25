@@ -15,24 +15,28 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Create app directory with proper ownership
-RUN mkdir -p /app /home/node/.openclaw /data /app/bin && \
+# ===========================================================
+# FIX 1: Create /data as a proper persistent volume mount point
+# owned by node so the app can write directly to it —
+# no copy-sync gymnastics needed.
+# ===========================================================
+RUN mkdir -p /app /home/node/.openclaw /data/.openclaw /data/workspace \
+             /data/.openclaw/credentials/whatsapp/default \
+             /data/.openclaw/agents /data/.openclaw/store /data/.openclaw/sessions \
+             /app/bin && \
     chown -R node:node /app /home/node /data && \
     chmod 755 /app /home/node /data && \
-    chmod 700 /home/node/.openclaw
+    chmod 700 /home/node/.openclaw /data/.openclaw
 
 WORKDIR /app
 
-# Copy files with proper ownership - ORDER MATTERS for layer caching
+# Copy files with proper ownership — ORDER MATTERS for layer caching
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
-# ============================================
-# THE CRITICAL FIX: Remove --frozen-lockfile
-# ============================================
-# Install dependencies as node user
+# Install dependencies as node user (no frozen-lockfile for flexibility)
 USER node
 RUN pnpm install --no-frozen-lockfile
 
@@ -44,31 +48,41 @@ RUN pnpm build && \
     pnpm ui:build && \
     rm -rf node_modules/.cache
 
-# Copy and set up start script (must be done as root for proper permissions)
+# ===========================================================
+# FIX 2: Single clean entrypoint as root (to fix volume
+# ownership at runtime), then drops to node immediately.
+# ===========================================================
 USER root
 COPY --chown=root:root bin/start.sh /app/bin/start.sh
-RUN chmod +x /app/bin/start.sh && \
-    chown -R node:node /app /home/node
+RUN chmod +x /app/bin/start.sh
 
-# CRITICAL: Create entrypoint wrapper to fix permissions at runtime
-RUN echo '#!/bin/bash\n\
-chown -R node:node /data /home/node/.openclaw 2>/dev/null || true\n\
+# The entrypoint ONLY fixes ownership then hands off to start.sh as node
+RUN printf '#!/bin/bash\n\
+# Fix ownership of the Railway persistent volume at runtime.\n\
+# Railway mounts /data as root — we correct this before dropping privileges.\n\
+chown -R node:node /data 2>/dev/null || true\n\
 chmod -R 755 /data 2>/dev/null || true\n\
-exec /app/bin/start.sh "$@"' > /app/bin/entrypoint.sh && \
+chmod 700 /data/.openclaw 2>/dev/null || true\n\
+exec /app/bin/start.sh "$@"\n' > /app/bin/entrypoint.sh && \
     chmod +x /app/bin/entrypoint.sh
 
-# Environment configuration for Railway
+# ===========================================================
+# FIX 3: Environment variables — all state goes to /data
+# directly. Matches Railway env var settings exactly.
+# OPENCLAW_HOME=/data is the single source of truth.
+# ===========================================================
 ENV OPENCLAW_PREFER_PNPM=1 \
     OPENCLAW_NO_BUN=1 \
     NODE_ENV=production \
     HOME=/home/node \
     USER=node \
-    OPENCLAW_STATE_DIR=/home/node/.openclaw \
-    OPENCLAW_WORKSPACE_DIR=/home/node/workspace \
-    BAILEYS_STORE_PATH=/home/node/.openclaw/credentials/whatsapp/default \
+    OPENCLAW_HOME=/data \
+    OPENCLAW_STATE_DIR=/data/.openclaw \
+    OPENCLAW_WORKSPACE_DIR=/data/workspace \
+    BAILEYS_STORE_PATH=/data/.openclaw/credentials/whatsapp/default \
     PORT=3000
 
-# Health check - CRITICAL: Must match the port app actually listens on
+# Health check — must match port app actually listens on
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:3000/health || exit 1
 
