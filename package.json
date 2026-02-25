@@ -193,6 +193,9 @@
     "zod": "^4.3.6",
     "socks-proxy-agent": "^8.0.4"
   },
+  "overrides": {
+  "@whiskeysockets/baileys": "github:WhiskeySockets/Baileys#master"
+  }
   "devDependencies": {
     "@grammyjs/types": "^3.24.0",
     "@lit-labs/signals": "^0.2.0",
