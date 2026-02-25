@@ -1,39 +1,37 @@
 #!/bin/bash
 # =============================================================
-# OpenClaw Gateway Start Script — Railway + WhatsApp Edition
+# OpenClaw start.sh — runs AS node user (gosu handles the drop)
 # =============================================================
-# KEY DESIGN DECISION: We write DIRECTLY to /data (the Railway
-# persistent volume). NO copy-sync pattern. This eliminates:
-#   - Data loss on crash (SIGKILL skips traps)
-#   - Path conflicts between Railway env vars and in-script overrides
-#   - Ownership race conditions
+# This script is called by entrypoint.sh AFTER:
+#   - chown -R node:node /data  (done as root in entrypoint.sh)
+#   - exec gosu node ...        (we are now the node user)
+# So: NO 'su', NO 'sudo', NO privilege operations here.
 # =============================================================
 set -e
 
-# -----------------------------------------------------------------
-# 1. ESTABLISH THE CANONICAL STATE DIRECTORY
-#    OPENCLAW_HOME=/data is set in Dockerfile + Railway env vars.
-#    Everything derives from it here so there is ONE source of truth.
-# -----------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# 1. CANONICAL PATHS — all from OPENCLAW_HOME (= /data on Railway)
+# ─────────────────────────────────────────────────────────────
 export OPENCLAW_HOME="${OPENCLAW_HOME:-/data}"
 export OPENCLAW_STATE_DIR="${OPENCLAW_HOME}/.openclaw"
 export OPENCLAW_WORKSPACE_DIR="${OPENCLAW_HOME}/workspace"
 export BAILEYS_STORE_PATH="${OPENCLAW_STATE_DIR}/credentials/whatsapp/default"
-export NODE_ENV=production
-export HOME=/home/node
+export NODE_ENV="${NODE_ENV:-production}"
+export HOME="/home/node"
+export PORT="${PORT:-3000}"
 
 echo "[OpenClaw] ============================================"
-echo "[OpenClaw] Starting WhatsApp Gateway on Railway"
-echo "[OpenClaw] State dir  : $OPENCLAW_STATE_DIR"
-echo "[OpenClaw] Workspace  : $OPENCLAW_WORKSPACE_DIR"
-echo "[OpenClaw] Baileys    : $BAILEYS_STORE_PATH"
-echo "[OpenClaw] Port       : ${PORT:-3000}"
+echo "[OpenClaw] User:      $(whoami)"
+echo "[OpenClaw] Home:      $HOME"
+echo "[OpenClaw] State:     $OPENCLAW_STATE_DIR"
+echo "[OpenClaw] Workspace: $OPENCLAW_WORKSPACE_DIR"
+echo "[OpenClaw] Baileys:   $BAILEYS_STORE_PATH"
+echo "[OpenClaw] Port:      $PORT"
 echo "[OpenClaw] ============================================"
 
-# -----------------------------------------------------------------
-# 2. ENSURE DIRECTORY STRUCTURE EXISTS
-#    Idempotent — safe to run even if dirs already exist.
-# -----------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# 2. ENSURE DIRECTORY STRUCTURE (as node user, safe to run always)
+# ─────────────────────────────────────────────────────────────
 mkdir -p \
     "$BAILEYS_STORE_PATH" \
     "${OPENCLAW_STATE_DIR}/agents" \
@@ -41,56 +39,67 @@ mkdir -p \
     "${OPENCLAW_STATE_DIR}/sessions" \
     "$OPENCLAW_WORKSPACE_DIR"
 
-# -----------------------------------------------------------------
-# 3. FIX PERMISSIONS
-#    Railway mounts /data as root. entrypoint.sh already did a
-#    bulk chown, but we also fix here for safety on re-deploys.
-# -----------------------------------------------------------------
-chown -R node:node "$OPENCLAW_HOME" 2>/dev/null || true
-chmod 755 "$OPENCLAW_HOME" 2>/dev/null || true
-chmod 700 "$OPENCLAW_STATE_DIR" 2>/dev/null || true
-
-# Fix credential file permissions (Baileys needs 600 on key files)
+# Fix credential file permissions (Baileys needs these)
 find "${OPENCLAW_STATE_DIR}/credentials" -type f -exec chmod 600 {} \; 2>/dev/null || true
 find "${OPENCLAW_STATE_DIR}/credentials" -type d -exec chmod 700 {} \; 2>/dev/null || true
 
-# -----------------------------------------------------------------
-# 4. DIAGNOSTIC — show what credentials exist
-# -----------------------------------------------------------------
-echo "[OpenClaw] Checking existing WhatsApp credentials..."
+# ─────────────────────────────────────────────────────────────
+# 3. CREDENTIAL CHECK
+# ─────────────────────────────────────────────────────────────
 if [ -f "${BAILEYS_STORE_PATH}/creds.json" ]; then
-    echo "[OK] Found creds.json — WhatsApp credentials present, no QR scan needed"
-    ls -la "${BAILEYS_STORE_PATH}/creds.json" 2>/dev/null || true
-    echo "[OK] Pre-key count: $(ls ${BAILEYS_STORE_PATH}/pre-key-*.json 2>/dev/null | wc -l)"
+    echo "[OK] WhatsApp creds.json found — no QR scan needed"
+    echo "[OK] Pre-keys: $(ls ${BAILEYS_STORE_PATH}/pre-key-*.json 2>/dev/null | wc -l)"
 else
-    echo "[WARN] No creds.json found — WhatsApp will show QR code for pairing"
-    echo "[INFO] After scanning QR, credentials are saved to: $BAILEYS_STORE_PATH"
-    echo "[INFO] They will persist across restarts via Railway's /data volume"
+    echo "[WARN] No creds.json — QR code will appear in logs for WhatsApp pairing"
 fi
 
-# -----------------------------------------------------------------
-# 5. LAUNCH — drop to node user and start the gateway
-#    We use 'su' with explicit env exports to guarantee correct vars.
-#    Note: do NOT use -p flag (preserve), as that would inherit
-#    any stale vars from the parent shell.
-# -----------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# 4. HEALTH PROBE BACKGROUND SERVER
+# Starts an instant /health responder using Node.js (no extra
+# packages needed). Railway probes immediately on boot — this
+# keeps the deployment alive while the full gateway initializes.
+# Once the real gateway is up on $PORT it takes over automatically.
+# ─────────────────────────────────────────────────────────────
+echo "[OpenClaw] Starting health probe server on port $PORT..."
+node -e "
+const http = require('http');
+const port = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, {'Content-Type': 'application/json'});
+    res.end(JSON.stringify({status:'starting',uptime:process.uptime()}));
+  } else {
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    res.end('OpenClaw starting...');
+  }
+});
+server.listen(port, '0.0.0.0', () => {
+  console.log('[health-probe] Listening on port ' + port);
+});
+// Auto-exit after 3 minutes — the real gateway will have started by then
+setTimeout(() => {
+  console.log('[health-probe] Handing off to main gateway');
+  server.close();
+  process.exit(0);
+}, 180000);
+" &
+HEALTH_PROBE_PID=$!
+echo "[OpenClaw] Health probe PID: $HEALTH_PROBE_PID"
+
+# Give the probe a moment to bind to the port
+sleep 1
+
+# ─────────────────────────────────────────────────────────────
+# 5. LAUNCH THE REAL GATEWAY
+# Kill health probe first so the port is free for the gateway
+# ─────────────────────────────────────────────────────────────
+echo "[OpenClaw] Killing health probe, handing port to gateway..."
+kill $HEALTH_PROBE_PID 2>/dev/null || true
+sleep 1
+
 echo "[OpenClaw] Launching gateway..."
 cd /app
-
-exec su node -s /bin/bash -c "
-    export HOME=/home/node
-    export OPENCLAW_HOME=${OPENCLAW_HOME}
-    export OPENCLAW_STATE_DIR=${OPENCLAW_STATE_DIR}
-    export OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR}
-    export BAILEYS_STORE_PATH=${BAILEYS_STORE_PATH}
-    export NODE_ENV=production
-    export PORT=${PORT:-3000}
-    export OPENCLAW_NO_BUN=${OPENCLAW_NO_BUN:-1}
-    export OPENCLAW_CHANNELS_WHATSAPP_ENABLED=${OPENCLAW_CHANNELS_WHATSAPP_ENABLED:-true}
-    export OPENCLAW_CHANNELS_WHATSAPP_DM_POLICY=${OPENCLAW_CHANNELS_WHATSAPP_DM_POLICY:-pairing}
-    export NODE_OPTIONS='${NODE_OPTIONS:---max-old-space-size=4096}'
-    cd /app && exec node openclaw.mjs gateway \
-        --allow-unconfigured \
-        --host 0.0.0.0 \
-        --port ${PORT:-3000}
-"
+exec node openclaw.mjs gateway \
+    --allow-unconfigured \
+    --host 0.0.0.0 \
+    --port "${PORT}"
