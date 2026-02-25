@@ -1,87 +1,96 @@
 #!/bin/bash
+# =============================================================
+# OpenClaw Gateway Start Script — Railway + WhatsApp Edition
+# =============================================================
+# KEY DESIGN DECISION: We write DIRECTLY to /data (the Railway
+# persistent volume). NO copy-sync pattern. This eliminates:
+#   - Data loss on crash (SIGKILL skips traps)
+#   - Path conflicts between Railway env vars and in-script overrides
+#   - Ownership race conditions
+# =============================================================
 set -e
 
+# -----------------------------------------------------------------
+# 1. ESTABLISH THE CANONICAL STATE DIRECTORY
+#    OPENCLAW_HOME=/data is set in Dockerfile + Railway env vars.
+#    Everything derives from it here so there is ONE source of truth.
+# -----------------------------------------------------------------
+export OPENCLAW_HOME="${OPENCLAW_HOME:-/data}"
+export OPENCLAW_STATE_DIR="${OPENCLAW_HOME}/.openclaw"
+export OPENCLAW_WORKSPACE_DIR="${OPENCLAW_HOME}/workspace"
+export BAILEYS_STORE_PATH="${OPENCLAW_STATE_DIR}/credentials/whatsapp/default"
+export NODE_ENV=production
 export HOME=/home/node
-cd "$HOME"
 
-echo "[OpenClaw] Starting WhatsApp Gateway..."
+echo "[OpenClaw] ============================================"
+echo "[OpenClaw] Starting WhatsApp Gateway on Railway"
+echo "[OpenClaw] State dir  : $OPENCLAW_STATE_DIR"
+echo "[OpenClaw] Workspace  : $OPENCLAW_WORKSPACE_DIR"
+echo "[OpenClaw] Baileys    : $BAILEYS_STORE_PATH"
+echo "[OpenClaw] Port       : ${PORT:-3000}"
+echo "[OpenClaw] ============================================"
 
-# Create all required directories with proper structure
-mkdir -p "$HOME/.openclaw/credentials/whatsapp/default"
-mkdir -p "$HOME/.openclaw/agents"
-mkdir -p "$HOME/.openclaw/store"
-mkdir -p "$HOME/.openclaw/sessions"
-mkdir -p "$HOME/workspace"
+# -----------------------------------------------------------------
+# 2. ENSURE DIRECTORY STRUCTURE EXISTS
+#    Idempotent — safe to run even if dirs already exist.
+# -----------------------------------------------------------------
+mkdir -p \
+    "$BAILEYS_STORE_PATH" \
+    "${OPENCLAW_STATE_DIR}/agents" \
+    "${OPENCLAW_STATE_DIR}/store" \
+    "${OPENCLAW_STATE_DIR}/sessions" \
+    "$OPENCLAW_WORKSPACE_DIR"
 
-# Debug: Show current state locations
-echo "[DEBUG] Checking for existing credentials..."
-ls -la "$HOME/.openclaw/" 2>/dev/null || echo "[DEBUG] No existing state in HOME"
-ls -la "/data/.openclaw/" 2>/dev/null || echo "[DEBUG] No existing state in /data"
+# -----------------------------------------------------------------
+# 3. FIX PERMISSIONS
+#    Railway mounts /data as root. entrypoint.sh already did a
+#    bulk chown, but we also fix here for safety on re-deploys.
+# -----------------------------------------------------------------
+chown -R node:node "$OPENCLAW_HOME" 2>/dev/null || true
+chmod 755 "$OPENCLAW_HOME" 2>/dev/null || true
+chmod 700 "$OPENCLAW_STATE_DIR" 2>/dev/null || true
 
-# CRITICAL: Restore credentials from persistent volume (/data) if they exist
-if [ -d "/data/.openclaw" ] && [ "$(ls -A /data/.openclaw 2>/dev/null)" ]; then
-    echo "[OK] Found existing state in /data, restoring..."
-    
-    # Backup current state if exists
-    if [ -d "$HOME/.openclaw" ] && [ "$(ls -A $HOME/.openclaw 2>/dev/null)" ]; then
-        mv "$HOME/.openclaw" "$HOME/.openclaw.backup.$(date +%s)"
-    fi
-    
-    # Copy with preservation of permissions
-    cp -r /data/.openclaw "$HOME/"
-    
-    # CRITICAL: Fix ownership - credentials must be owned by node user
-    chown -R node:node "$HOME/.openclaw"
-    
-    # Ensure proper permissions on credential files
-    find "$HOME/.openclaw/credentials" -type f -exec chmod 600 {} \; 2>/dev/null || true
-    find "$HOME/.openclaw/credentials" -type d -exec chmod 700 {} \; 2>/dev/null || true
-    
-    echo "[OK] State restored from /data"
+# Fix credential file permissions (Baileys needs 600 on key files)
+find "${OPENCLAW_STATE_DIR}/credentials" -type f -exec chmod 600 {} \; 2>/dev/null || true
+find "${OPENCLAW_STATE_DIR}/credentials" -type d -exec chmod 700 {} \; 2>/dev/null || true
+
+# -----------------------------------------------------------------
+# 4. DIAGNOSTIC — show what credentials exist
+# -----------------------------------------------------------------
+echo "[OpenClaw] Checking existing WhatsApp credentials..."
+if [ -f "${BAILEYS_STORE_PATH}/creds.json" ]; then
+    echo "[OK] Found creds.json — WhatsApp credentials present, no QR scan needed"
+    ls -la "${BAILEYS_STORE_PATH}/creds.json" 2>/dev/null || true
+    echo "[OK] Pre-key count: $(ls ${BAILEYS_STORE_PATH}/pre-key-*.json 2>/dev/null | wc -l)"
 else
-    echo "[WARN] No existing state found in /data - WhatsApp will require fresh QR scan"
+    echo "[WARN] No creds.json found — WhatsApp will show QR code for pairing"
+    echo "[INFO] After scanning QR, credentials are saved to: $BAILEYS_STORE_PATH"
+    echo "[INFO] They will persist across restarts via Railway's /data volume"
 fi
 
-# Set proper permissions on all directories
-chown -R node:node "$HOME/.openclaw" "$HOME/workspace" 2>/dev/null || true
-chmod -R 755 "$HOME/.openclaw" 2>/dev/null || true
-
-# Setup graceful shutdown handler to persist state
-cleanup() {
-    echo "[OpenClaw] Shutting down, syncing state to /data..."
-    if [ -d "$HOME/.openclaw" ] && [ -d "/data" ]; then
-        chown -R node:node "$HOME/.openclaw" 2>/dev/null || true
-        
-        # Use rsync for efficient sync, fallback to cp
-        rsync -av --delete "$HOME/.openclaw/" "/data/.openclaw/" 2>/dev/null || \
-        cp -r "$HOME/.openclaw/"* "/data/.openclaw/" 2>/dev/null
-        
-        echo "[OK] State synced to /data"
-    fi
-    exit 0
-}
-
-trap cleanup SIGTERM SIGINT
-
-# Export critical environment variables for WhatsApp/Baileys
-export OPENCLAW_STATE_DIR=/home/node/.openclaw
-export OPENCLAW_WORKSPACE_DIR=/home/node/workspace
-export BAILEYS_STORE_PATH="$HOME/.openclaw/credentials/whatsapp/default"
-export NODE_ENV=production
-
-echo "[OpenClaw] Launching gateway on port ${PORT:-3000}..."
-echo "[OpenClaw] State directory: $OPENCLAW_STATE_DIR"
-echo "[OpenClaw] WhatsApp credentials: $BAILEYS_STORE_PATH"
-
+# -----------------------------------------------------------------
+# 5. LAUNCH — drop to node user and start the gateway
+#    We use 'su' with explicit env exports to guarantee correct vars.
+#    Note: do NOT use -p flag (preserve), as that would inherit
+#    any stale vars from the parent shell.
+# -----------------------------------------------------------------
+echo "[OpenClaw] Launching gateway..."
 cd /app
 
-# CRITICAL FIX: Run as node user but keep environment variables
-# Use 'su' with -p to preserve environment or export vars explicitly
-exec su -p node -c "cd /app && \
-    export HOME=/home/node && \
-    export OPENCLAW_STATE_DIR=/home/node/.openclaw && \
-    export OPENCLAW_WORKSPACE_DIR=/home/node/workspace && \
-    export BAILEYS_STORE_PATH=/home/node/.openclaw/credentials/whatsapp/default && \
-    export NODE_ENV=production && \
-    export PORT=${PORT:-3000} && \
-    exec node openclaw.mjs gateway --allow-unconfigured --host 0.0.0.0 --port ${PORT:-3000}"
+exec su node -s /bin/bash -c "
+    export HOME=/home/node
+    export OPENCLAW_HOME=${OPENCLAW_HOME}
+    export OPENCLAW_STATE_DIR=${OPENCLAW_STATE_DIR}
+    export OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR}
+    export BAILEYS_STORE_PATH=${BAILEYS_STORE_PATH}
+    export NODE_ENV=production
+    export PORT=${PORT:-3000}
+    export OPENCLAW_NO_BUN=${OPENCLAW_NO_BUN:-1}
+    export OPENCLAW_CHANNELS_WHATSAPP_ENABLED=${OPENCLAW_CHANNELS_WHATSAPP_ENABLED:-true}
+    export OPENCLAW_CHANNELS_WHATSAPP_DM_POLICY=${OPENCLAW_CHANNELS_WHATSAPP_DM_POLICY:-pairing}
+    export NODE_OPTIONS='${NODE_OPTIONS:---max-old-space-size=4096}'
+    cd /app && exec node openclaw.mjs gateway \
+        --allow-unconfigured \
+        --host 0.0.0.0 \
+        --port ${PORT:-3000}
+"
