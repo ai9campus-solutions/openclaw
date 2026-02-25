@@ -11,13 +11,15 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     rsync \
     ca-certificates \
+    curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Create app directory with proper ownership
 RUN mkdir -p /app /home/node/.openclaw /data /app/bin && \
     chown -R node:node /app /home/node /data && \
-    chmod 755 /app /home/node /data
+    chmod 755 /app /home/node /data && \
+    chmod 700 /home/node/.openclaw
 
 WORKDIR /app
 
@@ -41,9 +43,16 @@ RUN pnpm build && \
 
 # Copy and set up start script (must be done as root for proper permissions)
 USER root
-COPY --chown=node:node bin/start.sh /app/bin/start.sh
+COPY --chown=root:root bin/start.sh /app/bin/start.sh
 RUN chmod +x /app/bin/start.sh && \
     chown -R node:node /app /home/node
+
+# CRITICAL: Create entrypoint wrapper to fix permissions at runtime
+RUN echo '#!/bin/bash\n\
+chown -R node:node /data /home/node/.openclaw 2>/dev/null || true\n\
+chmod -R 755 /data 2>/dev/null || true\n\
+exec /app/bin/start.sh "$@"' > /app/bin/entrypoint.sh && \
+    chmod +x /app/bin/entrypoint.sh
 
 # Environment configuration for Railway
 ENV OPENCLAW_PREFER_PNPM=1 \
@@ -53,10 +62,4 @@ ENV OPENCLAW_PREFER_PNPM=1 \
     USER=node \
     OPENCLAW_STATE_DIR=/home/node/.openclaw \
     OPENCLAW_WORKSPACE_DIR=/home/node/workspace \
-    PORT=3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:${PORT}/health || exit 1
-
-ENTRYPOINT ["/app/bin/start.sh"]
+    BAILEYS_STORE_PATH=/home/node/.opencl
