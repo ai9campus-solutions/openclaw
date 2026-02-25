@@ -30,9 +30,9 @@ COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
 # Install dependencies as node user
-# CRITICAL FIX: Remove --frozen-lockfile to allow lockfile regeneration
+# Using --frozen-lockfile because package.json now matches lockfile
 USER node
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 # Copy the rest of the application
 COPY --chown=node:node . .
