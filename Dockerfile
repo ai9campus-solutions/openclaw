@@ -30,8 +30,9 @@ COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
 # Install dependencies as node user
+# CRITICAL FIX: Remove --frozen-lockfile to allow lockfile regeneration
 USER node
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 # Copy the rest of the application
 COPY --chown=node:node . .
@@ -62,4 +63,11 @@ ENV OPENCLAW_PREFER_PNPM=1 \
     USER=node \
     OPENCLAW_STATE_DIR=/home/node/.openclaw \
     OPENCLAW_WORKSPACE_DIR=/home/node/workspace \
-    BAILEYS_STORE_PATH=/home/node/.opencl
+    BAILEYS_STORE_PATH=/home/node/.openclaw/credentials/whatsapp/default \
+    PORT=3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+ENTRYPOINT ["/app/bin/entrypoint.sh"]
