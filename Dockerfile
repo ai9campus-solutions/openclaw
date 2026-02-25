@@ -6,20 +6,20 @@ RUN curl -fsSL https://bun.sh/install | bash && \
 
 ENV PATH="/root/.bun/bin:${PATH}"
 
+# Install required system packages including rsync for state sync
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    rsync \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
 # Create app directory with proper ownership
-RUN mkdir -p /app /home/node/.openclaw && \
-    chown -R node:node /app /home/node && \
-    chmod 755 /app /home/node
+RUN mkdir -p /app /home/node/.openclaw /data && \
+    chown -R node:node /app /home/node /data && \
+    chmod 755 /app /home/node /data
 
 WORKDIR /app
-
-ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
 
 # Copy files with proper ownership
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
@@ -31,18 +31,8 @@ COPY --chown=node:node scripts ./scripts
 USER node
 RUN pnpm install --frozen-lockfile
 
-# Switch back to root for browser installation
+# Switch back to root for additional setup
 USER root
-ARG OPENCLAW_INSTALL_BROWSER=""
-RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-    mkdir -p /home/node/.cache/ms-playwright && \
-    PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-    chown -R node:node /home/node/.cache/ms-playwright && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
 
 # Build as node user
 USER node
@@ -51,20 +41,27 @@ RUN pnpm build && \
     pnpm ui:build && \
     rm -rf node_modules/.cache
 
+# Environment configuration for Railway
 ENV OPENCLAW_PREFER_PNPM=1 \
     OPENCLAW_NO_BUN=1 \
     NODE_ENV=production \
     HOME=/home/node \
-    USER=node
+    USER=node \
+    OPENCLAW_STATE_DIR=/home/node/.openclaw \
+    OPENCLAW_WORKSPACE_DIR=/home/node/workspace \
+    PORT=3000
 
 # Create bin directory and copy start script
+USER root
 RUN mkdir -p /app/bin
 COPY --chown=node:node bin/start.sh /app/bin/start.sh
 
-# Final permission fix and switch to root for entrypoint
-USER root
+# Final permission fix
 RUN chmod +x /app/bin/start.sh && \
     chown -R node:node /app /home/node
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
 ENTRYPOINT ["/app/bin/start.sh"]
-CMD ["node","openclaw.mjs","gateway","--allow-unconfigured"]
